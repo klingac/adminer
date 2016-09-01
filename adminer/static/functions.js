@@ -5,7 +5,9 @@
 * @param [bool]
 */
 function alterClass(el, className, enable) {
-	el.className = el.className.replace(RegExp('(^|\\s)' + className + '(\\s|$)'), '$2') + (enable ? ' ' + className : '');
+	if (el) {
+		el.className = el.className.replace(RegExp('(^|\\s)' + className + '(\\s|$)'), '$2') + (enable ? ' ' + className : '');
+	}
 }
 
 /** Toggle visibility
@@ -30,12 +32,29 @@ function cookie(assign, days) {
 }
 
 /** Verify current Adminer version
+* @param string
 */
-function verifyVersion() {
+function verifyVersion(current) {
 	cookie('adminer_version=0', 1);
-	var script = document.createElement('script');
-	script.src = location.protocol + '//www.adminer.org/version.php';
-	document.body.appendChild(script);
+	var iframe = document.createElement('iframe');
+	iframe.src = 'https://www.adminer.org/version/?current=' + current;
+	iframe.frameBorder = 0;
+	iframe.marginHeight = 0;
+	iframe.scrolling = 'no';
+	iframe.style.width = '7ex';
+	iframe.style.height = '1.25em';
+	if (window.postMessage && window.addEventListener) {
+		iframe.style.display = 'none';
+		addEventListener('message', function (event) {
+			if (event.origin == 'https://www.adminer.org') {
+				var match = /version=(.+)/.exec(event.data);
+				if (match) {
+					cookie('adminer_version=' + match[1], 1);
+				}
+			}
+		}, false);
+	}
+	document.getElementById('version').appendChild(iframe);
 }
 
 /** Get value of select
@@ -78,7 +97,7 @@ function parentTag(el, tag) {
 function trCheck(el) {
 	var tr = parentTag(el, 'tr');
 	alterClass(tr, 'checked', el.checked);
-	if (el.form && el.form['all']) {
+	if (el.form && el.form['all'] && el.form['all'].onclick) { // Opera treats form.all as document.all
 		el.form['all'].onclick();
 	}
 }
@@ -167,6 +186,9 @@ function tableClick(event, click) {
 			click = false;
 		}
 		el = el.parentNode;
+		if (!el) { // Ctrl+click on text fields hides the element
+			return;
+		}
 	}
 	el = el.firstChild.firstChild;
 	if (click) {
@@ -292,6 +314,17 @@ function selectAddRow(field) {
 		inputs[i].className = '';
 	}
 	field.parentNode.parentNode.appendChild(row);
+}
+
+/** Prevent onsearch handler on Enter
+* @param HTMLInputElement
+* @param KeyboardEvent
+*/
+function selectSearchKeydown(el, event) {
+	if (event.keyCode == 13 || event.keyCode == 10) {
+		el.onsearch = function () {
+		};
+	}
 }
 
 /** Clear column name after resetting search
@@ -425,12 +458,17 @@ function editingKeydown(event) {
 function functionChange(select) {
 	var input = select.form[select.name.replace(/^function/, 'fields')];
 	if (selectValue(select)) {
-		if (input.origMaxLength === undefined) {
+		if (input.origType === undefined) {
+			input.origType = input.type;
 			input.origMaxLength = input.maxLength;
 		}
 		input.removeAttribute('maxlength');
-	} else if (input.origMaxLength >= 0) {
-		input.maxLength = input.origMaxLength;
+		input.type = 'text';
+	} else if (input.origType) {
+		input.type = input.origType;
+		if (input.origMaxLength >= 0) {
+			input.maxLength = input.origMaxLength;
+		}
 	}
 	helpClose();
 }
@@ -445,17 +483,39 @@ function keyupChange() {
 	}
 }
 
+/** Add new field in schema-less edit
+* @param HTMLInputElement
+*/
+function fieldChange(field) {
+	var row = cloneNode(parentTag(field, 'tr'));
+	var inputs = row.getElementsByTagName('input');
+	for (var i = 0; i < inputs.length; i++) {
+		inputs[i].value = '';
+	}
+	// keep value in <select> (function)
+	parentTag(field, 'table').appendChild(row);
+	field.onchange = function () { };
+}
+
 
 
 /** Create AJAX request
 * @param string
 * @param function (XMLHttpRequest)
 * @param [string]
+* @param [string]
 * @return XMLHttpRequest or false in case of an error
 */
-function ajax(url, callback, data) {
+function ajax(url, callback, data, message) {
 	var request = (window.XMLHttpRequest ? new XMLHttpRequest() : (window.ActiveXObject ? new ActiveXObject('Microsoft.XMLHTTP') : false));
 	if (request) {
+		var ajaxStatus = document.getElementById('ajaxstatus');
+		if (message) {
+			ajaxStatus.innerHTML = '<div class="message">' + message + '</div>';
+			ajaxStatus.className = ajaxStatus.className.replace(/ hidden/g, '');
+		} else {
+			ajaxStatus.className += ' hidden';
+		}
 		request.open((data ? 'POST' : 'GET'), url);
 		if (data) {
 			request.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
@@ -463,7 +523,12 @@ function ajax(url, callback, data) {
 		request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
 		request.onreadystatechange = function () {
 			if (request.readyState == 4) {
-				callback(request);
+				if (/^2/.test(request.status)) {
+					callback(request);
+				} else {
+					ajaxStatus.innerHTML = (request.status ? request.responseText : '<div class="error">' + offlineMessage + '</div>');
+					ajaxStatus.className = ajaxStatus.className.replace(/ hidden/g, '');
+				}
 			}
 		};
 		request.send(data);
@@ -477,11 +542,9 @@ function ajax(url, callback, data) {
 */
 function ajaxSetHtml(url) {
 	return ajax(url, function (request) {
-		if (request.status) {
-			var data = eval('(' + request.responseText + ')');
-			for (var key in data) {
-				setHtml(key, data[key]);
-			}
+		var data = eval('(' + request.responseText + ')');
+		for (var key in data) {
+			setHtml(key, data[key]);
 		}
 	});
 }
@@ -508,18 +571,17 @@ function ajaxForm(form, message, button) {
 	}
 	data = data.join('&');
 	
-	setHtml('message', message);
 	var url = form.action;
 	if (!/post/i.test(form.method)) {
 		url = url.replace(/\?.*/, '') + '?' + data;
 		data = '';
 	}
 	return ajax(url, function (request) {
-		setHtml('message', request.responseText);
+		setHtml('ajaxstatus', request.responseText);
 		if (window.jush) {
-			jush.highlight_tag('code', 0);
+			jush.highlight_tag(document.getElementById('ajaxstatus').getElementsByTagName('code'), 0);
 		}
-	}, data);
+	}, data, message);
 }
 
 
@@ -577,7 +639,7 @@ function selectClick(td, event, text, warning) {
 	input.focus();
 	if (text == 2) { // long text
 		return ajax(location.href + '&' + encodeURIComponent(td.id) + '=', function (request) {
-			if (request.status) {
+			if (request.responseText) {
 				input.value = request.responseText;
 				input.name = td.id;
 			}
@@ -598,8 +660,8 @@ function selectClick(td, event, text, warning) {
 
 /** Load and display next page in select
 * @param HTMLLinkElement
-* @param string
 * @param number
+* @param string
 * @return boolean
 */
 function selectLoadMore(a, limit, loading) {

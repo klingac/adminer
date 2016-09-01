@@ -66,6 +66,9 @@ if (isset($_GET["mssql"])) {
 				if (!$result) {
 					$result = $this->_result;
 				}
+				if (!$result) {
+					return false;
+				}
 				if (sqlsrv_field_metadata($result)) {
 					return new Min_Result($result);
 				}
@@ -74,7 +77,7 @@ if (isset($_GET["mssql"])) {
 			}
 
 			function next_result() {
-				return sqlsrv_next_result($this->_result);
+				return $this->_result ? sqlsrv_next_result($this->_result) : null;
 			}
 
 			function result($query, $field = 0) {
@@ -90,7 +93,7 @@ if (isset($_GET["mssql"])) {
 		class Min_Result {
 			var $_result, $_offset = 0, $_fields, $num_rows;
 
-			function Min_Result($result) {
+			function __construct($result) {
 				$this->_result = $result;
 				// $this->num_rows = sqlsrv_num_rows($result); // available only in scrollable results
 			}
@@ -198,7 +201,7 @@ if (isset($_GET["mssql"])) {
 		class Min_Result {
 			var $_result, $_offset = 0, $_fields, $num_rows;
 
-			function Min_Result($result) {
+			function __construct($result) {
 				$this->_result = $result;
 				$this->num_rows = mssql_num_rows($result);
 			}
@@ -427,7 +430,7 @@ WHERE OBJECT_NAME(i.object_id) = " . q($table)
 	}
 
 	function auto_increment() {
-		return " IDENTITY" . ($_POST["Auto_increment"] != "" ? "(" . (+$_POST["Auto_increment"]) . ",1)" : "") . " PRIMARY KEY";
+		return " IDENTITY" . ($_POST["Auto_increment"] != "" ? "(" . number($_POST["Auto_increment"]) . ",1)" : "") . " PRIMARY KEY";
 	}
 
 	function alter_table($table, $name, $fields, $foreign, $comment, $engine, $collation, $auto_increment, $partitioning) {
@@ -480,7 +483,7 @@ WHERE OBJECT_NAME(i.object_id) = " . q($table)
 			} elseif (!queries(($val[0] != "PRIMARY"
 				? "CREATE $val[0] " . ($val[0] != "INDEX" ? "INDEX " : "") . idf_escape($val[1] != "" ? $val[1] : uniqid($table . "_")) . " ON " . table($table)
 				: "ALTER TABLE " . table($table) . " ADD PRIMARY KEY"
-			) . " $val[2]")) {
+			) . " (" . implode(", ", $val[2]) . ")")) {
 				return false;
 			}
 		}
@@ -567,6 +570,7 @@ WHERE sys1.xtype = 'TR' AND sys2.name = " . q($table)
 	function trigger_options() {
 		return array(
 			"Timing" => array("AFTER", "INSTEAD OF"),
+			"Event" => array("INSERT", "UPDATE", "DELETE"),
 			"Type" => array("AS"),
 		);
 	}
@@ -607,7 +611,7 @@ WHERE sys1.xtype = 'TR' AND sys2.name = " . q($table)
 	}
 
 	function support($feature) {
-		return preg_match('~^(database|table|columns|sql|indexes|scheme|trigger|view|drop_col)$~', $feature); //! routine|
+		return preg_match('~^(columns|database|drop_col|indexes|scheme|sql|table|trigger|view|view_trigger)$~', $feature); //! routine|
 	}
 
 	$jush = "mssql";

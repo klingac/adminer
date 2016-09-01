@@ -39,13 +39,13 @@ if (!$error && $_POST) {
 			$q = $query . (preg_match("~;[ \t\r\n]*\$~", $query) ? "" : ";"); //! doesn't work with DELIMITER |
 			if (!$history || reset(end($history)) != $q) { // no repeated queries
 				restart_session();
-				$history[] = array($q, time());
+				$history[] = array($q, time()); //! add elapsed time
 				set_session("queries", $history_all); // required because reference is unlinked by stop_session()
 				stop_session();
 			}
 		}
 
-		$space = "(?:\\s|/\\*.*\\*/|(?:#|-- )[^\n]*\n|--\n)";
+		$space = "(?:\\s|/\\*[\s\S]*?\\*/|(?:#|-- )[^\n]*\n?|--\r?\n)";
 		$delimiter = ";";
 		$offset = 0;
 		$empty = true;
@@ -55,7 +55,6 @@ if (!$error && $_POST) {
 		}
 		$commands = 0;
 		$errors = array();
-		$line = 0;
 		$parse = '[\'"' . ($jush == "sql" ? '`#' : ($jush == "sqlite" ? '`[' : ($jush == "mssql" ? '[' : ''))) . ']|/\\*|-- |$' . ($jush == "pgsql" ? '|\\$[^$]*\\$' : '');
 		$total_start = microtime(true);
 		parse_str($_COOKIE["adminer_export"], $adminer_export);
@@ -63,7 +62,7 @@ if (!$error && $_POST) {
 		unset($dump_format["sql"]);
 
 		while ($query != "") {
-			if (!$offset && preg_match("~^$space*DELIMITER\\s+(\\S+)~i", $query, $match)) {
+			if (!$offset && preg_match("~^$space*+DELIMITER\\s+(\\S+)~i", $query, $match)) {
 				$delimiter = $match[1];
 				$query = substr($query, strlen($match[0]));
 			} else {
@@ -95,71 +94,82 @@ if (!$error && $_POST) {
 						$q = substr($query, 0, $pos);
 						$commands++;
 						$print = "<pre id='sql-$commands'><code class='jush-$jush'>" . shorten_utf8(trim($q), 1000) . "</code></pre>\n";
-						if (!$_POST["only_errors"]) {
+						if ($jush == "sqlite" && preg_match("~^$space*+ATTACH\\b~i", $q, $match)) {
+							// PHP doesn't support setting SQLITE_LIMIT_ATTACHED
 							echo $print;
-							ob_flush();
-							flush(); // can take a long time - show the running query
-						}
-						$start = microtime(true);
-						//! don't allow changing of character_set_results, convert encoding of displayed query
-						if ($connection->multi_query($q) && is_object($connection2) && preg_match("~^$space*USE\\b~isU", $q)) {
-							$connection2->query($q);
-						}
-
-						do {
-							$result = $connection->store_result();
-							$end = microtime(true);
-							$time = " <span class='time'>(" . format_time($start, $end) . ")</span>"
-								. (strlen($q) < 1000 ? " <a href='" . h(ME) . "sql=" . urlencode(trim($q)) . "'>" . lang('Edit') . "</a>" : "") // 1000 - maximum length of encoded URL in IE is 2083 characters
-							;
-
-							if ($connection->error) {
-								echo ($_POST["only_errors"] ? $print : "");
-								echo "<p class='error'>" . lang('Error in query') . ($connection->errno ? " ($connection->errno)" : "") . ": " . error() . "\n";
-								$errors[] = " <a href='#sql-$commands'>$commands</a>";
-								if ($_POST["error_stops"]) {
-									break 2;
-								}
-
-							} elseif (is_object($result)) {
-								$orgtables = select($result, $connection2);
-								if (!$_POST["only_errors"]) {
-									echo "<form action='' method='post'>\n";
-									echo "<p>" . ($result->num_rows ? lang('%d row(s)', $result->num_rows) : "") . $time;
-									$id = "export-$commands";
-									$export = ", <a href='#$id' onclick=\"return !toggle('$id');\">" . lang('Export') . "</a><span id='$id' class='hidden'>: "
-										. html_select("output", $adminer->dumpOutput(), $adminer_export["output"]) . " "
-										. html_select("format", $dump_format, $adminer_export["format"])
-										. "<input type='hidden' name='query' value='" . h($q) . "'>"
-										. " <input type='submit' name='export' value='" . lang('Export') . "'><input type='hidden' name='token' value='$token'></span>\n"
-									;
-									if ($connection2 && preg_match("~^($space|\\()*SELECT\\b~isU", $q) && ($explain = explain($connection2, $q))) {
-										$id = "explain-$commands";
-										echo ", <a href='#$id' onclick=\"return !toggle('$id');\">EXPLAIN</a>$export";
-										echo "<div id='$id' class='hidden'>\n";
-										select($explain, $connection2, $orgtables);
-										echo "</div>\n";
-									} else {
-										echo $export;
-									}
-									echo "</form>\n";
-								}
-
-							} else {
-								if (preg_match("~^$space*(CREATE|DROP|ALTER)$space+(DATABASE|SCHEMA)\\b~isU", $q)) {
-									restart_session();
-									set_session("dbs", null); // clear cache
-									stop_session();
-								}
-								if (!$_POST["only_errors"]) {
-									echo "<p class='message' title='" . h($connection->info) . "'>" . lang('Query executed OK, %d row(s) affected.', $connection->affected_rows) . "$time\n";
-								}
+							echo "<p class='error'>" . lang('ATTACH queries are not supported.') . "\n";
+							$errors[] = " <a href='#sql-$commands'>$commands</a>";
+							if ($_POST["error_stops"]) {
+								break;
+							}
+						} else {
+							if (!$_POST["only_errors"]) {
+								echo $print;
+								ob_flush();
+								flush(); // can take a long time - show the running query
+							}
+							$start = microtime(true);
+							//! don't allow changing of character_set_results, convert encoding of displayed query
+							if ($connection->multi_query($q) && is_object($connection2) && preg_match("~^$space*+USE\\b~i", $q)) {
+								$connection2->query($q);
 							}
 
-							$start = $end;
-						} while ($connection->next_result());
+							do {
+								$result = $connection->store_result();
+								$time = " <span class='time'>(" . format_time($start) . ")</span>"
+									. (strlen($q) < 1000 ? " <a href='" . h(ME) . "sql=" . urlencode(trim($q)) . "'>" . lang('Edit') . "</a>" : "") // 1000 - maximum length of encoded URL in IE is 2083 characters
+								;
 
-						$line += substr_count($q.$found, "\n");
+								if ($connection->error) {
+									echo ($_POST["only_errors"] ? $print : "");
+									echo "<p class='error'>" . lang('Error in query') . ($connection->errno ? " ($connection->errno)" : "") . ": " . error() . "\n";
+									$errors[] = " <a href='#sql-$commands'>$commands</a>";
+									if ($_POST["error_stops"]) {
+										break 2;
+									}
+
+								} elseif (is_object($result)) {
+									$limit = $_POST["limit"];
+									$orgtables = select($result, $connection2, array(), $limit);
+									if (!$_POST["only_errors"]) {
+										echo "<form action='' method='post'>\n";
+										$num_rows = $result->num_rows;
+										echo "<p>" . ($num_rows ? ($limit && $num_rows > $limit ? lang('%d / ', $limit) : "") . lang('%d row(s)', $num_rows) : "");
+										echo $time;
+										$id = "export-$commands";
+										$export = ", <a href='#$id' onclick=\"return !toggle('$id');\">" . lang('Export') . "</a><span id='$id' class='hidden'>: "
+											. html_select("output", $adminer->dumpOutput(), $adminer_export["output"]) . " "
+											. html_select("format", $dump_format, $adminer_export["format"])
+											. "<input type='hidden' name='query' value='" . h($q) . "'>"
+											. " <input type='submit' name='export' value='" . lang('Export') . "'><input type='hidden' name='token' value='$token'></span>\n"
+										;
+										if ($connection2 && preg_match("~^($space|\\()*+SELECT\\b~i", $q) && ($explain = explain($connection2, $q))) {
+											$id = "explain-$commands";
+											echo ", <a href='#$id' onclick=\"return !toggle('$id');\">EXPLAIN</a>$export";
+											echo "<div id='$id' class='hidden'>\n";
+											select($explain, $connection2, $orgtables);
+											echo "</div>\n";
+										} else {
+											echo $export;
+										}
+										echo "</form>\n";
+									}
+
+								} else {
+									if (preg_match("~^$space*+(CREATE|DROP|ALTER)$space++(DATABASE|SCHEMA)\\b~i", $q)) {
+										restart_session();
+										set_session("dbs", null); // clear cache
+										stop_session();
+									}
+									if (!$_POST["only_errors"]) {
+										echo "<p class='message' title='" . h($connection->info) . "'>" . lang('Query executed OK, %d row(s) affected.', $connection->affected_rows) . "$time\n";
+									}
+								}
+
+								$start = microtime(true);
+							} while ($connection->next_result());
+						}
+
 						$query = substr($query, $offset);
 						$offset = 0;
 					}
@@ -172,7 +182,7 @@ if (!$error && $_POST) {
 			echo "<p class='message'>" . lang('No commands to execute.') . "\n";
 		} elseif ($_POST["only_errors"]) {
 			echo "<p class='message'>" . lang('%d query(s) executed OK.', $commands - count($errors));
-			echo " <span class='time'>(" . format_time($total_start, microtime(true)) . ")</span>\n";
+			echo " <span class='time'>(" . format_time($total_start) . ")</span>\n";
 		} elseif ($errors && $commands > 1) {
 			echo "<p class='error'>" . lang('Error in query') . ": " . implode("", $errors) . "\n";
 		}
@@ -200,14 +210,14 @@ if (!isset($_GET["import"])) {
 	textarea("query", $q, 20);
 	echo ($_POST ? "" : "<script type='text/javascript'>focus(document.getElementsByTagName('textarea')[0]);</script>\n");
 	echo "<p>$execute\n";
+	echo lang('Limit rows') . ": <input type='number' name='limit' class='size' value='" . h($_POST ? $_POST["limit"] : $_GET["limit"]) . "'>\n";
 	
 } else {
 	echo "<fieldset><legend>" . lang('File upload') . "</legend><div>";
 	echo (ini_bool("file_uploads")
-		? '<input type="file" name="sql_file[]" multiple> (&lt; ' . ini_get("upload_max_filesize") . 'B)' // ignore post_max_size because it is for all form fields together and bytes computing would be necessary
+		? "SQL (&lt; " . ini_get("upload_max_filesize") . "B): <input type='file' name='sql_file[]' multiple>\n$execute" // ignore post_max_size because it is for all form fields together and bytes computing would be necessary
 		: lang('File uploads are disabled.')
 	);
-	echo "\n$execute";
 	echo "</div></fieldset>\n";
 	echo "<fieldset><legend>" . lang('From server') . "</legend><div>";
 	echo lang('Webserver file %s', "<code>adminer.sql" . (extension_loaded("zlib") ? "[.gz]" : "") . "</code>");
@@ -217,19 +227,24 @@ if (!isset($_GET["import"])) {
 }
 
 echo checkbox("error_stops", 1, ($_POST ? $_POST["error_stops"] : isset($_GET["import"])), lang('Stop on error')) . "\n";
-echo checkbox("only_errors", 1, $_POST["only_errors"], lang('Show only errors')) . "\n";
+echo checkbox("only_errors", 1, ($_POST ? $_POST["only_errors"] : isset($_GET["import"])), lang('Show only errors')) . "\n";
+echo "<input type='hidden' name='token' value='$token'>\n";
 
 if (!isset($_GET["import"]) && $history) {
 	print_fieldset("history", lang('History'), $_GET["history"] != "");
 	for ($val = end($history); $val; $val = prev($history)) { // not array_reverse() to save memory
 		$key = key($history);
-		list($q, $time) = $val;
-		echo '<a href="' . h(ME . "sql=&history=$key") . '">' . lang('Edit') . "</a> <span class='time' title='" . @date('Y-m-d', $time) . "'>" . @date("H:i:s", $time) . "</span> <code class='jush-$jush'>" . shorten_utf8(ltrim(str_replace("\n", " ", str_replace("\r", "", preg_replace('~^(#|-- ).*~m', '', $q)))), 80, "</code>") . "<br>\n"; // @ - time zone may be not set
+		list($q, $time, $elapsed) = $val;
+		echo '<a href="' . h(ME . "sql=&history=$key") . '">' . lang('Edit') . "</a>"
+			. " <span class='time' title='" . @date('Y-m-d', $time) . "'>" . @date("H:i:s", $time) . "</span>" // @ - time zone may be not set
+			. " <code class='jush-$jush'>" . shorten_utf8(ltrim(str_replace("\n", " ", str_replace("\r", "", preg_replace('~^(#|-- ).*~m', '', $q)))), 80, "</code>")
+			. ($elapsed ? " <span class='time'>($elapsed)</span>" : "")
+			. "<br>\n"
+		;
 	}
 	echo "<input type='submit' name='clear' value='" . lang('Clear') . "'>\n";
 	echo "<a href='" . h(ME . "sql=&history=all") . "'>" . lang('Edit all') . "</a>\n";
 	echo "</div></fieldset>\n";
 }
 ?>
-<input type="hidden" name="token" value="<?php echo $token; ?>">
 </form>

@@ -6,7 +6,7 @@
 	/** Create object for performing database operations
 	* @param Min_DB
 	*/
-	function Min_SQL($connection) {
+	function __construct($connection) {
 		$this->_conn = $connection;
 	}
 	
@@ -18,9 +18,10 @@
 	* @param array result of $adminer->selectOrderProcess()
 	* @param int result of $adminer->selectLimitProcess()
 	* @param int index of page starting at zero
+	* @param bool whether to print the query
 	* @return Min_Result
 	*/
-	function select($table, $select, $where, $group, $order, $limit, $page) {
+	function select($table, $select, $where, $group, $order = array(), $limit = 1, $page = 0, $print = false) {
 		global $adminer, $jush;
 		$is_group = (count($group) < count($select));
 		$query = $adminer->selectQueryBuild($select, $where, $group, $order, $limit, $page);
@@ -33,8 +34,12 @@
 				"\n"
 			);
 		}
-		echo $adminer->selectQuery($query);
-		return $this->_conn->query($query);
+		$start = microtime(true);
+		$return = $this->_conn->query($query);
+		if ($print) {
+			echo $adminer->selectQuery($query, format_time($start));
+		}
+		return $return;
 	}
 	
 	/** Delete data from table

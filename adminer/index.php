@@ -1,6 +1,6 @@
 <?php
 /** Adminer - Compact database management
-* @link http://www.adminer.org/
+* @link https://www.adminer.org/
 * @author Jakub Vrana, http://www.vrana.cz/
 * @copyright 2007 Jakub Vrana
 * @license http://www.apache.org/licenses/LICENSE-2.0 Apache License, Version 2.0
@@ -10,7 +10,7 @@
 include "./include/bootstrap.inc.php";
 include "./include/tmpfile.inc.php";
 
-$enum_length = "'(?:''|[^'\\\\]|\\\\.)*+'";
+$enum_length = "'(?:''|[^'\\\\]|\\\\.)*'";
 $inout = "IN|OUT|INOUT";
 
 if (isset($_GET["select"]) && ($_POST["edit"] || $_POST["clone"]) && !$_POST["save"]) {

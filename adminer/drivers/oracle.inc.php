@@ -80,7 +80,7 @@ if (isset($_GET["oracle"])) {
 		class Min_Result {
 			var $_result, $_offset = 1, $num_rows;
 
-			function Min_Result($result) {
+			function __construct($result) {
 				$this->_result = $result;
 			}
 
@@ -352,7 +352,29 @@ ORDER BY uc.constraint_type, uic.column_position", $connection2) as $row) {
 	}
 
 	function foreign_keys($table) {
-		return array(); //!
+		$return = array();
+		$query = "SELECT c_list.CONSTRAINT_NAME as NAME,
+c_src.COLUMN_NAME as SRC_COLUMN,
+c_dest.OWNER as DEST_DB,
+c_dest.TABLE_NAME as DEST_TABLE,
+c_dest.COLUMN_NAME as DEST_COLUMN,
+c_list.DELETE_RULE as ON_DELETE
+FROM ALL_CONSTRAINTS c_list, ALL_CONS_COLUMNS c_src, ALL_CONS_COLUMNS c_dest
+WHERE c_list.CONSTRAINT_NAME = c_src.CONSTRAINT_NAME
+AND c_list.R_CONSTRAINT_NAME = c_dest.CONSTRAINT_NAME
+AND c_list.CONSTRAINT_TYPE = 'R'
+AND c_src.TABLE_NAME = " . q($table);
+		foreach (get_rows($query) as $row) {
+			$return[$row['NAME']] = array(
+				"db" => $row['DEST_DB'],
+				"table" => $row['DEST_TABLE'],
+				"source" => array($row['SRC_COLUMN']),
+				"target" => array($row['DEST_COLUMN']),
+				"on_delete" => $row['ON_DELETE'],
+				"on_update" => null,
+			);
+		}
+		return $return;
 	}
 
 	function truncate_tables($tables) {
@@ -414,7 +436,7 @@ ORDER BY PROCESS
 	}
 
 	function support($feature) {
-		return preg_match('~^(database|table|columns|sql|indexes|view|scheme|processlist|drop_col|variables|status)$~', $feature); //!
+		return preg_match('~^(columns|database|drop_col|indexes|processlist|scheme|sql|status|table|variables|view|view_trigger)$~', $feature); //!
 	}
 
 	$jush = "oracle";
